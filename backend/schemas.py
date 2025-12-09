@@ -5,6 +5,6 @@ class EmployeeSchema(BaseModel):
     email : str
     position : int
     department : str
-    preference : int
+    preference : str
     username : str
     api_key : str

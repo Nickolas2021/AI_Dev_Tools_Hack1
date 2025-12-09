@@ -1,13 +1,13 @@
 import uuid
 
 from sqlalchemy import Integer, String
-from sqlalchemy.orm import relationship, Mapped, mapped_column
+from sqlalchemy.orm import relationship, Mapped, mapped_column, MappedAsDataclass
 from sqlalchemy.dialects.postgresql import UUID
 
 from backend.database import Base
 
-class Employee(Base):
-    __tableename_ = 'employees'
+class Employee(MappedAsDataclass, Base):
+    __tablename__ = 'employees'
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), 

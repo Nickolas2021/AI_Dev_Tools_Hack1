@@ -5,11 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from database import Base, engine, SessionLocal
+
+from backend.database import Base, engine, SessionLocal
 from shared_models import Employee
 
 with open("secret.json", "r", encoding="utf-8") as f:
     cal_com_api_keys = json.load(f)
+
+
 
 @asynccontextmanager
 async def lifespan(app : FastAPI):
@@ -19,13 +22,14 @@ async def lifespan(app : FastAPI):
     print("Создана база данных")
 
     async with SessionLocal() as session:
-        result = session.execute(
+        result = await session.execute(
             select(Employee)
         )
-
-        if len(result.scalars.all()) == 0:
+        employees = result.scalars().all()
+        if len(employees) == 0:
             employee1 = Employee(
                 name="Николай Пащенко",
+                email="1210492n@gmail.com",
                 position=3,
                 department="AI",
                 preference="Встречи не позже 15:00",
@@ -35,11 +39,14 @@ async def lifespan(app : FastAPI):
             employee2 = Employee(
                 name="John Geery",
                 position=2,
+                email="johngeery4@gmail.com",
                 department="Sales",
                 preference="Встречи после обеда",
                 cal_com_username="john-geery-7jnfvx",
                 cal_com_api_key=cal_com_api_keys["john-geery-7jnfvx"]
             )
+            session.add_all([employee1, employee2])
+            await session.commit()
             print("Созданы сотрудники")
         else:
             print("В БД уже есть сотрудники")
@@ -83,4 +90,9 @@ async def get_departments(department : str):
         ).all()
 
         return {"employees" : employees}
+    
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.app:app", host="0.0.0.0", port=8002, reload=False)
+
 

@@ -87,6 +87,119 @@ async def find_event_type_by_duration(
     
     return None
 
+async def create_meeting(
+    organizer_name: str,     # ← От кого исходит встреча
+    attendee_name: str,      # ← Кому назначается встреча
+    start_time: str,
+    duration_minutes: int,
+    title: str = "Meeting"
+) -> dict:
+    """Назначает встречу между двумя сотрудниками
+    
+    Args:
+        organizer_name: Имя сотрудника, который назначает встречу (владелец календаря)
+        attendee_name: Имя сотрудника, которому назначается встреча (участник)
+        start_time: Время начала в ISO 8601 формате (например, "2025-12-10T14:00:00Z")
+        duration_minutes: Длительность встречи в минутах
+        title: Название встречи
+    
+    Returns:
+        dict: Информация о созданной встрече
+    """
+    
+    # Получаем обоих сотрудников из БД
+    async with SessionLocal() as session:
+        # Организатор (от кого)
+        result_organizer = await session.execute(
+            select(Employee).where(Employee.name == organizer_name)
+        )
+        organizer = result_organizer.scalar_one_or_none()
+        logger.info(f"organizer: {organizer.name}")
+        # Участник (кому)
+        result_attendee = await session.execute(
+            select(Employee).where(Employee.name == attendee_name)
+        )
+        attendee = result_attendee.scalar_one_or_none()
+        logger.info(f"attendee: {attendee.name}")
+        if not organizer:
+            return {"error": f"Организатор '{organizer_name}' не найден в БД"}
+        
+        if not attendee:
+            return {"error": f"Участник '{attendee_name}' не найден в БД"}
+    
+    # 1. Находим или создаем event type для организатора
+    event_type_id = await find_event_type_by_duration(
+        api_key=organizer.cal_com_api_key,  # ← API ключ ОРГАНИЗАТОРА
+        duration_minutes=duration_minutes
+    )
+    
+    # 2. Если event type не найден - создаем
+    if not event_type_id:
+        logger.info(f"Creating new event type for {duration_minutes} minutes")
+        create_response = await create_custom_event_type(
+            api_key=organizer.cal_com_api_key,
+            title=f"{title} ({duration_minutes}min)",
+            duration_minutes=duration_minutes
+        )
+        
+        if "event_type" in create_response and "id" in create_response["event_type"]:
+            event_type_id = create_response["event_type"]["id"]
+        else:
+            return {
+                "error": "Failed to create event type",
+                "details": create_response
+            }
+    
+    # 3. Создаем встречу в календаре ОРГАНИЗАТОРА
+    response = requests.post(
+        f"{CAL_COM_URL}/v1/bookings",
+        params={"apiKey": organizer.cal_com_api_key},  # ← Создаем В КАЛЕНДАРЕ организатора
+        json={
+            "eventTypeId": event_type_id,
+            "start": start_time,
+            "responses": {
+                "name": attendee.name,                    # ← Имя УЧАСТНИКА
+                "email": attendee.email  # ← Email участника
+            },
+            "timeZone": "Europe/Moscow",
+            "language": "ru",
+            "metadata": {
+                "organizer": organizer_name,
+                "attendee": attendee_name
+            }
+        }
+    )
+    
+    if response.status_code not in [200, 201]:
+        return {
+            "error": f"Cal.com API error: {response.status_code}",
+            "details": response.text
+        }
+    
+    booking_data = response.json()
+
+    logger.info(booking_data)
+    
+    return {
+        "success": True,
+        "organizer": {
+            "name": organizer.name,
+            "username": organizer.cal_com_username,
+            "calendar_url": f"https://cal.com/{organizer.cal_com_username}"
+        },
+        "attendee": {
+            "name": attendee.name,
+            "username": attendee.cal_com_username
+        },
+        "meeting": {
+            "title": title,
+            "start_time": start_time,
+            "duration_minutes": duration_minutes,
+            "booking_id": booking_data.get("id"),
+            "booking_url": booking_data.get("url")
+        }
+    }
+
 @mcp.tool()
 async def get_all_departments() -> list[str]:
     """
@@ -116,59 +229,49 @@ async def get_all_employees_from_department(department: str) -> list[str]:
         return employees
 
 @mcp.tool()
-async def create_meeting(
-    employee: EmployeeSchema,
+async def create_meeting_both_calendars(
+    organizer_name: str,
+    attendee_name: str,
     start_time: str,
     duration_minutes: int,
     title: str = "Meeting"
 ) -> dict:
-    """Назначает встречу с выбранным сотрудником
+    """_summary_
 
     Args:
-        attendee_name (str): имя сотрудника для встречи
-        attendee_email (str): емейл сотрудника для встречи
-        start_time (str): начало встречи
-        duration_minutes (int): длительность
-        title (str, optional): названия встречи. Defaults to "Meeting".
+        organizer_name (str): _description_
+        attendee_name (str): _description_
+        start_time (str): _description_
+        duration_minutes (int): _description_
+        title (str, optional): _description_. Defaults to "Meeting".
 
     Returns:
         dict: _description_
     """    
-    # 1. Попробовать найти существующий event type
-    event_type_id = await find_event_type_by_duration(duration_minutes)
     
-    # 2. Если не нашли - создать новый
-    if not event_type_id:
-        print(f"Creating new event type for {duration_minutes} minutes")
-        create_response = await create_custom_event_type(
-            title=f"{title} ({duration_minutes}min)",
-            duration_minutes=duration_minutes
-        )
-        
-        if "id" in create_response.get("event_type", {}):
-            event_type_id = create_response["event_type"]["id"]
-        else:
-            return {"error": "Failed to create event type"}
+    booking1 = await create_meeting(
+        organizer_name=organizer_name,
+        attendee_name=attendee_name,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        title=title
+    )
     
-    # 3. Создать встречу
-    response = requests.post(
-        f"{CAL_COM_URL}/v1/bookings",
-        params={"apiKey": employee.api_key},
-        json={
-            "eventTypeId": event_type_id,
-            "start": start_time,
-            "responses": {
-                "name": employee.name,
-                "email": employee.email
-            },
-            "timeZone": "Europe/Moscow"
-        }
+    # Создаем встречу в календаре участника (зеркальная)
+    booking2 = await create_meeting(
+        organizer_name=attendee_name,
+        attendee_name=organizer_name,
+        start_time=start_time,
+        duration_minutes=duration_minutes,
+        title=title
     )
     
     return {
-        "booking": response.json(),
-        "duration_minutes": duration_minutes,
-        "event_type_id": event_type_id
+        "success": True,
+        "bookings": {
+            "organizer_calendar": booking1,
+            "attendee_calendar": booking2
+        }
     }
 
 @mcp.tool()
@@ -212,11 +315,15 @@ async def get_available_slots(
         cal_username = getattr(employee_result, 'cal_com_username', None)
     
     # 2. Найти или создать event type с нужной длительностью
-    event_type_id = await find_event_type_by_duration(duration_minutes)
+    event_type_id = await find_event_type_by_duration(
+        api_key=employee.api_key, 
+        duration_minutes=duration_minutes
+    )
     
     if not event_type_id:
         logger.info(f"Event type на {duration_minutes} минут не найден, создаём новый")
         create_response = await create_custom_event_type(
+            api_key=employee.api_key,
             title=f"Meeting {duration_minutes}min",
             duration_minutes=duration_minutes
         )
