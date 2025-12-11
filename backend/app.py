@@ -8,12 +8,16 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from sqlalchemy import select
+import sys
 
 # ... ваши импорты БД ...
 from backend.database import Base, engine, SessionLocal
 from shared_models import Employee
 
 load_dotenv()
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 with open("secret.json", "r", encoding="utf-8") as f:
     cal_com_api_keys = json.load(f)
@@ -79,7 +83,16 @@ async def lifespan(app: FastAPI):
                 cal_com_username="john-geery-7jnfvx",
                 cal_com_api_key=cal_com_api_keys["john-geery-7jnfvx"]
             )
-            session.add_all([employee1, employee2])
+            employee3 = Employee(
+                name="Vadim Denisov",
+                position=3,
+                email="denisovoof@gmail.com",
+                department="AI",
+                preference="Нет",
+                cal_com_username="vadim-denisov-lwyxaf",
+                cal_com_api_key=cal_com_api_keys["vadim-denisov-lwyxaf"]
+            )
+            session.add_all([employee1, employee2, employee3])
             await session.commit()
             print("Созданы сотрудники")
         else:

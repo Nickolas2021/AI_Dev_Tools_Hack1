@@ -1,5 +1,7 @@
-from fastmcp import FastMCP
+from fastmcp import FastMCP, Context
+from fastmcp.tools.tool import ToolResult
 from sqlalchemy import select
+from    sqlalchemy.orm import selectinload
 import logging
 import os
 from dotenv import load_dotenv
@@ -23,7 +25,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("Office manager")
+mcp = FastMCP(USER_AGENT)
 
 async def create_custom_event_type(
     api_key: str,
@@ -31,12 +33,12 @@ async def create_custom_event_type(
     duration_minutes: int,
     slug: str = None
 ) -> dict:
-    """_summary_
+    """Создает новый тип временного промежутка
 
     Args:
-        title (str): _description_
-        duration_minutes (int): _description_
-        slug (str, optional): _description_. Defaults to None.
+        title (str): Название
+        duration_minutes (int): Длительность в минутах
+        slug (str, optional): удобочитаемый формат. Defaults to None.
 
     Returns:
         dict: _description_
@@ -50,7 +52,7 @@ async def create_custom_event_type(
         json={
             "title": title,
             "slug": slug,
-            "length": duration_minutes,  # Длительность в минутах
+            "length": duration_minutes,  
             "hidden": False
         }
     )
@@ -63,13 +65,13 @@ async def create_custom_event_type(
 async def find_event_type_by_duration(
         api_key: str,
         duration_minutes: int) -> int | None:
-    """_summary_
+    """найти подходящий временной промежуток
 
     Args:
-        duration_minutes (int): _description_
+        duration_minutes (int): длительность в минутах
 
     Returns:
-        int | None: _description_
+        int | None: id event type
     """    
     # Получить все event types пользователя
     response = requests.get(
@@ -153,7 +155,10 @@ async def create_meeting(
     # 3. Создаем встречу в календаре ОРГАНИЗАТОРА
     response = requests.post(
         f"{CAL_COM_URL}/v1/bookings",
-        params={"apiKey": organizer.cal_com_api_key},  # ← Создаем В КАЛЕНДАРЕ организатора
+        params={
+            "apiKey": organizer.cal_com_api_key,
+            "username": organizer.cal_com_username
+        },  # ← Создаем В КАЛЕНДАРЕ организатора
         json={
             "eventTypeId": event_type_id,
             "start": start_time,
@@ -227,8 +232,22 @@ async def get_all_employees_from_department(department: str) -> list[str]:
         employees = result.scalars().all()
 
         return employees
-
+    
 @mcp.tool()
+async def get_full_employee_info(employee_name: str):
+    """
+        Получить полную информацию о пользователе по его имени
+    """
+    async with SessionLocal() as session:
+        stmt = select(Employee).where(Employee.name == employee_name)
+        result = await session.execute(stmt)
+        row = result.scalar_one_or_none()
+        return row
+
+@mcp.tool(
+    name="create_meeting",
+    description="Создает встречу между двумя сотрудниками"
+)
 async def create_meeting_both_calendars(
     organizer_name: str,
     attendee_name: str,
@@ -236,14 +255,14 @@ async def create_meeting_both_calendars(
     duration_minutes: int,
     title: str = "Meeting"
 ) -> dict:
-    """_summary_
+    """Создать встречу для сотрудников
 
     Args:
-        organizer_name (str): _description_
-        attendee_name (str): _description_
-        start_time (str): _description_
-        duration_minutes (int): _description_
-        title (str, optional): _description_. Defaults to "Meeting".
+        organizer_name (str): организатор
+        attendee_name (str): собеседник
+        start_time (str): начало собрания
+        duration_minutes (int): длительность
+        title (str, optional): Заголовок. Defaults to "Meeting".
 
     Returns:
         dict: _description_
@@ -266,15 +285,19 @@ async def create_meeting_both_calendars(
         title=title
     )
     
-    return {
+    return ToolResult(
+        structured_content={
         "success": True,
         "bookings": {
             "organizer_calendar": booking1,
             "attendee_calendar": booking2
         }
-    }
+    })
 
-@mcp.tool()
+@mcp.tool(
+    name="free_slots",
+    description="Проверяет наличие свободных слотов в определенный промежуток"
+)
 async def get_available_slots(
     employee: EmployeeSchema,
     date_from: str,
@@ -339,8 +362,8 @@ async def get_available_slots(
             }
     
     # 3. Запросить свободные слоты из Cal.com API
-    start_time = f"{date_from}T00:00:00Z"
-    end_time = f"{date_to}T23:59:59Z"
+    start_time = f"{date_from}"
+    end_time = f"{date_to}"
     
     try:
         response = requests.get(
@@ -358,11 +381,13 @@ async def get_available_slots(
         
         if response.status_code != 200:
             logger.error(f"Cal.com API error: {response.status_code} - {response.text}")
-            return {
-                "error": f"Ошибка Cal.com API: {response.status_code}",
-                "details": response.text,
-                "employee": employee.name
-            }
+            return ToolResult(
+                structured_content={
+                    "error": f"Ошибка Cal.com API: {response.status_code}",
+                    "details": response.text,
+                    "employee": employee.name
+                }
+            )
         
         api_response = response.json()
         slots_data = api_response.get("slots", {})
@@ -385,32 +410,37 @@ async def get_available_slots(
         
         logger.info(f"Найдено {total_count} свободных слотов для {employee.name}")
         
-        return {
-            "employee": employee.name,
-            "cal_username": cal_username,
-            "duration_minutes": duration_minutes,
-            "date_range": {
-                "from": date_from,
-                "to": date_to
-            },
-            "slots": enhanced_slots,
-            "total_slots": total_count
-        }
+        return ToolResult(
+            structured_content={
+                "employee": employee.name,
+                "cal_username": cal_username,
+                "duration_minutes": duration_minutes,
+                "date_range": {
+                    "from": date_from,
+                    "to": date_to
+                },
+                "slots": enhanced_slots,
+                "total_slots": total_count
+            }
+        )
         
     except requests.exceptions.Timeout:
         logger.error("Timeout при запросе к Cal.com API")
-        return {
-            "error": "Превышено время ожидания ответа от Cal.com",
-            "employee": employee.name
-        }
+        return ToolResult(
+            structured_content={
+                "error": "Превышено время ожидания ответа от Cal.com",
+                "employee": employee.name
+            }
+        )
     except Exception as e:
         logger.error(f"Исключение при получении слотов: {str(e)}")
-        return {
-            "error": "Внутренняя ошибка при получении слотов",
-            "details": str(e),
-            "employee": employee.name
-        }
-
+        return ToolResult(
+            structured_content={
+                "error": "Внутренняя ошибка при получении слотов",
+                "details": str(e),
+                "employee": employee.name
+            }
+        )
 
 if __name__ == "__main__":
-    mcp.run(transport="streamable-http", host="0.0.0.0", port=8007)
+    mcp.run(transport="streamable-http", host="localhost", port=8000)
