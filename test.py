@@ -33,26 +33,26 @@ async def test():
         # Получение MCP session
         session = client.session
         # вызов функции для назначения встречи
-        # res = await session.call_tool(
-        #     name="create_meeting_both_calendars",
-        #     arguments={
-        #         "organizer_name": "Николай Пащенко",
-        #         "attendee_name": "John Geery",
-        #         "start_time": "2025-12-10T10:00:00Z",
-        #         "duration_minutes": 30,
-        #         "title": "Project Discussion"
-        #     }
-        # )
-
         res = await session.call_tool(
-            name="get_available_slots",
+            name="create_meeting",
             arguments={
-                "employee": employee_res,
-                "date_from": "2025-12-10",
-                "date_to": "2025-12-10",
-                "duration_minutes": 60
+                "organizer_name": "Николай Пащенко",
+                "attendee_name": "John Geery",
+                "start_time": "2025-12-18T10:00:00Z",
+                "duration_minutes": 30,
+                "title": "Project Discussion"
             }
         )
+
+        # res = await session.call_tool(
+        #     name="get_available_slots",
+        #     arguments={
+        #         "employee": employee_res,
+        #         "date_from": "2025-12-10",
+        #         "date_to": "2025-12-10",
+        #         "duration_minutes": 60
+        #     }
+        # )
         print(res)
 
 if __name__ == "__main__":

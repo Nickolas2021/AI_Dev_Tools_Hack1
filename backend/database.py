@@ -9,7 +9,7 @@ import asyncio
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-SQLALCHEMY_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5433/office_manager"
+SQLALCHEMY_DATABASE_URL = "postgresql+psycopg://postgres:password@localhost:5433/office_manager"
 
 engine = create_async_engine(
     SQLALCHEMY_DATABASE_URL, 

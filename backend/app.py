@@ -8,13 +8,18 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from sqlalchemy import select
+from langchain.messages import HumanMessage, AIMessage
 import sys
+import traceback
 
 # ... ваши импорты БД ...
 from backend.database import Base, engine, SessionLocal
 from shared_models import Employee
+from backend.langchain_agent import init_agent
 
 load_dotenv()
+
+agent = None
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -30,20 +35,54 @@ client = AsyncOpenAI(
     base_url="https://foundation-models.api.cloud.ru/v1"
 )
 
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я работаю через Polling внутри FastAPI 🚀")
+    print(f"START from {update.effective_user.id}")
+    await update.message.reply_text("ping")
+
+#history = {"messages": []}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    # ... ваша логика AI ...
+    print(f"MSG from {update.effective_user.id}: {update.message.text}")
+    await update.message.reply_text("pong")
+    # 1. ЛОГ: Видим ли мы вообще сообщение?
+    print(f"📩 DEBUG: Пришло сообщение от {update.effective_user.first_name}: {update.message.text}")
+
+    # 2. Инициализация истории для конкретного пользователя (вместо глобальной)
+    if "history" not in context.user_data:
+        context.user_data["history"] = {"messages": []}
+    
+    # Получаем ссылку на историю пользователя
+    history = context.user_data["history"]
+    
+    user_text = HumanMessage(content=update.message.text)
+
     try:
-        response = await client.chat.completions.create(
-             model="ai-sage/GigaChat3-10B-A1.8B",
-             messages=[{"role": "user", "content": user_text}]
-        )
-        await update.message.reply_text(response.choices[0].message.content)
-    except:
-        await update.message.reply_text("Ошибка AI")
+        # Добавляем сообщение пользователя
+        history["messages"].append(user_text)
+
+        # Вызываем агента
+        print("🤖 DEBUG: Отправляю запрос агенту...")
+        # Важно: agent.ainvoke возвращает новый стейт
+        new_history = await agent.ainvoke(history)
+        
+        # Обновляем историю в user_data
+        context.user_data["history"] = new_history
+        
+        # Получаем последний ответ
+        last_message = new_history["messages"][-1]
+        
+        # Проверка: last_message может быть объектом или строкой
+        response_text = last_message.content if hasattr(last_message, "content") else str(last_message)
+
+        print(f"📤 DEBUG: Ответ агента: {response_text[:50]}...")
+        await update.message.reply_text(response_text)
+
+    except Exception as e:
+        # 3. ЛОГ: Если упало, то почему?
+        print("❌ ОШИБКА В HANDLER:")
+        traceback.print_exc() # Выведет полный текст ошибки в консоль
+        await update.message.reply_text(f"Внутренняя ошибка бота: {e}")
 
 def setup_bot():
     app = ApplicationBuilder().token(os.getenv("TG_TOKEN")).build()
@@ -58,7 +97,10 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("✅ БД готова")
+    global agent
+    agent = await init_agent()
 
+    print("DEBUG: Проверяю сотрудников...")
     async with SessionLocal() as session:
         result = await session.execute(
             select(Employee)
@@ -99,14 +141,19 @@ async def lifespan(app: FastAPI):
             print("В БД уже есть сотрудники")
 
     # 2. Инициализация и Запуск Бота (Polling)
+    print("DEBUG: Настраиваю бота...")
     global ptb_app
     ptb_app = setup_bot()
     
+    print("DEBUG: Инициализация ptb_app...")
     await ptb_app.initialize()
+    print("DEBUG: Старт ptb_app...")
     await ptb_app.start()
     
     # ⚠️ ВАЖНО: Удаляем вебхук перед поллингом (иначе ошибка 409)
+    print("DEBUG: Удаление вебхука...")
     await ptb_app.bot.delete_webhook()
+    print("DEBUG: Вебхук удален")
     
     # Запускаем поллинг в фоне (Updater)
     print("🚀 Запускаю Polling...")

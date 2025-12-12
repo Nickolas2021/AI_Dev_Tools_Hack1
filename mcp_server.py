@@ -260,7 +260,7 @@ async def create_meeting_both_calendars(
     Args:
         organizer_name (str): организатор
         attendee_name (str): собеседник
-        start_time (str): начало собрания
+        start_time (str): начало собрания (формат ISO 8601)
         duration_minutes (int): длительность
         title (str, optional): Заголовок. Defaults to "Meeting".
 
@@ -277,20 +277,20 @@ async def create_meeting_both_calendars(
     )
     
     # Создаем встречу в календаре участника (зеркальная)
-    booking2 = await create_meeting(
-        organizer_name=attendee_name,
-        attendee_name=organizer_name,
-        start_time=start_time,
-        duration_minutes=duration_minutes,
-        title=title
-    )
+    # booking2 = await create_meeting(
+    #     organizer_name=attendee_name,
+    #     attendee_name=organizer_name,
+    #     start_time=start_time,
+    #     duration_minutes=duration_minutes,
+    #     title=title
+    # )
     
     return ToolResult(
         structured_content={
         "success": True,
         "bookings": {
             "organizer_calendar": booking1,
-            "attendee_calendar": booking2
+            #"attendee_calendar": booking2
         }
     })
 
